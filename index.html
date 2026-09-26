@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="theme-color" content="#0E2A4B">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Training</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%93%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <main id="login" class="login" hidden>
+    <form id="login-form" class="login-card" autocomplete="on">
+      <svg class="mark" viewBox="0 0 96 56" aria-hidden="true">
+        <rect x="2" y="6" width="92" height="44" rx="2" fill="#1A477C" stroke="#F3F6FA" stroke-width="3"/>
+        <line x1="4" y1="28" x2="92" y2="28" stroke="#F3F6FA" stroke-width="1"/>
+        <rect x="46" y="1" width="4" height="54" fill="#0B2340"/>
+        <rect x="45" y="1" width="6" height="3" fill="#F3F6FA"/>
+        <circle cx="72" cy="17" r="4" fill="#FF9F1C"/>
+      </svg>
+      <h1>Training</h1>
+      <label class="field">Username
+        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <label class="field">Password
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <label class="check">
+        <input id="remember" name="remember" type="checkbox">
+        Stay signed in on this device
+      </label>
+      <button id="login-btn" class="primary" type="submit">Unlock</button>
+      <p id="login-msg" class="msg" role="alert"></p>
+    </form>
+  </main>
+
+  <div id="app" class="shell" hidden>
+    <header class="top">
+      <div class="top-text">
+        <h1 id="title">Training</h1>
+        <p id="subtitle" class="focus"></p>
+      </div>
+      <div class="top-actions">
+        <button type="button" id="btn-history" class="ghost">History</button>
+        <button type="button" id="btn-menu" class="ghost">Menu</button>
+      </div>
+    </header>
+    <nav id="day-strip" class="table" aria-label="Training days"></nav>
+    <section id="view-train"></section>
+    <section id="view-history" hidden></section>
+  </div>
+
+  <div id="timer" class="timer" role="timer" hidden>
+    <span class="ballc" aria-hidden="true"></span>
+    <span class="time"><span class="time-label">Rest</span> <span id="timer-time">1:30</span></span>
+    <button type="button" id="timer-more">+15 s</button>
+    <button type="button" id="timer-skip">Skip</button>
+  </div>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <dialog id="menu" aria-labelledby="menu-title">
+    <h2 id="menu-title">Menu</h2>
+    <div class="menu-actions">
+      <button type="button" id="m-export" class="ghost wide">Export backup</button>
+      <label class="ghost wide file-btn">Import backup
+        <input type="file" id="m-import" accept="application/json,.json">
+      </label>
+      <p id="m-orphan" class="orphan" hidden>
+        Logs saved under a previous username or password are still on this device.
+        Export a backup to keep them; they only open with the credentials that created them.
+      </p>
+      <button type="button" id="m-lock" class="ghost wide">Lock and sign out</button>
+    </div>
+    <div id="m-notes" class="plan-notes"></div>
+    <button type="button" id="m-close" class="primary wide">Close</button>
+  </dialog>
+
+  <script src="crypto.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
