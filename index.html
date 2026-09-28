@@ -26,8 +26,8 @@
         <circle cx="72" cy="17" r="4" fill="#FF9F1C"/>
       </svg>
       <h1>Training</h1>
-      <label class="field">Username
-        <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label class="field">Email
+        <input id="email" name="email" type="email" autocomplete="username" autocapitalize="none" spellcheck="false" required>
       </label>
       <label class="field">Password
         <input id="password" name="password" type="password" autocomplete="current-password" required>
@@ -36,8 +36,10 @@
         <input id="remember" name="remember" type="checkbox">
         Stay signed in on this device
       </label>
-      <button id="login-btn" class="primary" type="submit">Unlock</button>
+      <button id="login-btn" class="primary" type="submit">Sign in</button>
+      <button id="forgot" class="link" type="button">Forgot password</button>
       <p id="login-msg" class="msg" role="alert"></p>
+      <p class="login-note">Invite only. Ask the owner to add your email.</p>
     </form>
   </main>
 
@@ -55,6 +57,7 @@
     <nav id="day-strip" class="table" aria-label="Training days"></nav>
     <section id="view-train"></section>
     <section id="view-history" hidden></section>
+    <section id="view-edit" hidden></section>
   </div>
 
   <div id="timer" class="timer" role="timer" hidden>
@@ -92,25 +95,22 @@
 
   <dialog id="menu" aria-labelledby="menu-title">
     <h2 id="menu-title">Menu</h2>
+    <p id="m-user" class="m-user"></p>
     <div class="menu-actions">
+      <button type="button" id="m-edit" class="ghost wide">Edit plan</button>
       <button type="button" id="m-export" class="ghost wide">Export backup</button>
       <label class="ghost wide file-btn">Import backup
         <input type="file" id="m-import" accept="application/json,.json">
       </label>
-      <p id="m-orphan" class="orphan" hidden>
-        Logs saved under a previous username or password are still on this device.
-        Export a backup to keep them; they only open with the credentials that created them.
-      </p>
       <button type="button" id="m-games" class="ghost wide">Minigames</button>
-      <button type="button" id="m-lock" class="ghost wide">Lock and sign out</button>
+      <button type="button" id="m-signout" class="ghost wide">Sign out</button>
     </div>
     <div id="m-notes" class="plan-notes"></div>
     <button type="button" id="m-close" class="primary wide">Close</button>
   </dialog>
 
-  <script src="crypto.js"></script>
   <script src="variants.js"></script>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
   <script src="games.js"></script>
 </body>
 </html>

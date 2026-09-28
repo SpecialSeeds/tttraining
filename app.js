@@ -1,9 +1,9 @@
-'use strict';
+// Training log. Sign in, plans and logs go through cloud.js (Firebase); everything
+// else is plain DOM. Loaded as a module, so it runs in strict mode on its own.
+import * as Cloud from './cloud.js';
 
-(() => {
+{
   const DAY_IDS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-  const LOG_KEY = 'tt.logs.v1';
-  const ORPHAN_KEY = 'tt.logs.orphaned';
   const PREF_KEY = 'tt.prefs';
   const EQUIP = [
     { v: 'machine', label: 'Machines' },
@@ -22,9 +22,11 @@
     'stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   const state = {
-    vault: null,
-    key: null,
+    user: null,
+    admin: false,
     plan: null,
+    draft: null,
+    openEx: new Set(),
     logs: { sessions: {} },
     dayId: null,
     view: 'train',
@@ -103,62 +105,27 @@
     }
   }
 
-  /* ================= IndexedDB: optional "stay signed in" ================= */
-  // Stores the non extractable CryptoKey object. The raw key bytes and the
-  // password are never written anywhere.
+  /* ================= saving ================= */
 
-  function idb() {
-    return new Promise((resolve, reject) => {
-      const req = indexedDB.open('tt-vault', 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('keys');
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-  async function idbDo(mode, fn) {
-    const db = await idb();
-    return new Promise((resolve, reject) => {
-      const req = fn(db.transaction('keys', mode).objectStore('keys'));
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-  }
-  const idbGet = (k) => idbDo('readonly', (s) => s.get(k));
-  const idbSet = (k, v) => idbDo('readwrite', (s) => s.put(v, k));
-  const idbDel = (k) => idbDo('readwrite', (s) => s.delete(k));
-
-  /* ================= logs (encrypted at rest) ================= */
-
-  let saveChain = Promise.resolve();
-  function saveLogs() {
-    saveChain = saveChain
-      .then(async () => {
-        const box = await Vault.encryptWithKey(state.key, state.logs);
-        localStorage.setItem(LOG_KEY, JSON.stringify({ salt: state.vault.kdf.salt, box }));
-      })
-      .catch((err) => toast(`Could not save on this device: ${err.message}`));
-    return saveChain;
+  function persist(key) {
+    Cloud.saveSession(state.user.uid, key, state.logs.sessions[key]).catch(() => {});
   }
 
-  async function loadLogs() {
-    const raw = localStorage.getItem(LOG_KEY);
-    if (!raw) return;
-    try {
-      const stored = JSON.parse(raw);
-      if (stored.salt !== state.vault.kdf.salt) throw new Error('different vault');
-      state.logs = await Vault.decryptWithKey(state.key, stored.box);
-      if (!state.logs || typeof state.logs.sessions !== 'object') state.logs = { sessions: {} };
-    } catch {
-      // Logs were written under other credentials. Keep them aside, never overwrite.
-      localStorage.setItem(ORPHAN_KEY, raw);
-      localStorage.removeItem(LOG_KEY);
-      state.logs = { sessions: {} };
-    }
+  let syncPending = 0;
+  function showSync(pending, err) {
+    syncPending = pending;
+    if (err) toast(err.code === 'permission-denied' ? 'This account no longer has access. Ask the owner.' : `Could not sync: ${err.message}`);
+    const el = $('#sync');
+    if (!el) return;
+    el.textContent = pending ? (navigator.onLine ? 'Syncing' : 'Saved on this phone, syncs when online') : 'Synced';
+    el.classList.toggle('waiting', !!pending);
   }
 
   /* ================= plan + session model ================= */
 
-  const findDay = (id) => state.plan.days.find((d) => d.id === id) || state.plan.days[0];
+  // The plan being edited while the editor is open, otherwise the saved plan.
+  const activePlan = () => (state.view === 'edit' ? state.draft : state.plan);
+  const findDay = (id) => activePlan().days.find((d) => d.id === id) || activePlan().days[0];
   // The plan exercise plus its machine and free weight swaps (variants.js, or `alts` in the plan).
   function variantsOf(base) {
     const alts = { ...((window.VARIANTS || {})[base.id] || {}), ...(base.alts || {}) };
@@ -205,7 +172,7 @@
     while (arr.length <= i) arr.push({});
     Object.assign(arr[i], patch);
     s.updated = Date.now();
-    saveLogs();
+    persist(key);
   }
 
   const doneSets = (session, exId) => ((session && session.sets && session.sets[exId]) || []).filter((s) => s && s.done);
@@ -285,28 +252,35 @@
     renderStrip();
     $('#view-train').hidden = state.view !== 'train';
     $('#view-history').hidden = state.view !== 'history';
+    $('#view-edit').hidden = state.view !== 'edit';
     if (state.view === 'train') renderTrain();
-    else renderHistory();
+    else if (state.view === 'history') renderHistory();
+    else renderEdit();
   }
 
   function renderHeader() {
     const day = findDay(state.dayId);
+    const focus = day.focus ? `${day.focus.replace(/\.$/, '')}.` : '';
     if (state.view === 'history') {
       $('#title').textContent = 'History';
       $('#subtitle').textContent = 'Every logged session for one exercise, newest first.';
+    } else if (state.view === 'edit') {
+      $('#title').textContent = 'Edit plan';
+      $('#subtitle').textContent = `${day.name}. Pick a day, change anything, then save.`;
     } else {
       $('#title').textContent = day.name;
-      $('#subtitle').textContent = day.optional ? `Optional session. ${day.focus}.` : `${day.focus}.`;
+      $('#subtitle').textContent = day.optional ? `Optional session. ${focus}` : focus;
     }
     $('#btn-history').textContent = state.view === 'history' ? 'Train' : 'History';
-    $('#day-strip').hidden = state.view !== 'train';
+    $('#btn-history').hidden = state.view === 'edit';
+    $('#day-strip').hidden = state.view === 'history';
   }
 
   function renderStrip() {
     const todayId = DAY_IDS[new Date().getDay()];
     const core = h('div', { class: 'side core' });
     const optional = h('div', { class: 'side optional' });
-    for (const day of state.plan.days) {
+    for (const day of activePlan().days) {
       const btn = h(
         'button',
         {
@@ -344,7 +318,7 @@
       onclick: () => {
         ensureSession(key).stair = !stairDone;
         ensureSession(key).updated = Date.now();
-        saveLogs();
+        persist(key);
         renderTrain();
       },
     });
@@ -356,13 +330,17 @@
     const root = $('#view-train');
     root.replaceChildren();
     append(root, [
-      h('p', { class: 'logging', text: `Logging for ${fmtLong(localISO())}` }),
+      h('p', { class: 'logging' }, `Logging for ${fmtLong(localISO())} · `, h('span', { id: 'sync', text: 'Synced' })),
       renderPrefs(),
       day.note ? h('p', { class: 'note', text: day.note }) : null,
-      h('div', { class: 'warmup' }, h('div', null, h('h2', { text: `${warm.name}, ${warm.minutes} min` }), h('p', { text: day.stair })), stairTick),
-      h('ol', { class: 'exercises' }, exercises.map((ex) => renderExercise(ex, key))),
-      h('p', { class: 'summary', text: `${done} of ${planned} sets done` }),
+      warm.name
+        ? h('div', { class: 'warmup' }, h('div', null, h('h2', { text: warm.minutes ? `${warm.name}, ${warm.minutes} min` : warm.name }), day.stair ? h('p', { text: day.stair }) : null), stairTick)
+        : null,
+      exercises.length
+        ? [h('ol', { class: 'exercises' }, exercises.map((ex) => renderExercise(ex, key))), h('p', { class: 'summary', text: `${done} of ${planned} sets done` })]
+        : h('p', { class: 'empty', text: 'Nothing planned for this day. Add exercises from Menu, Edit plan.' }),
     ]);
+    showSync(syncPending);
     window.scrollTo(0, scrollY);
   }
 
@@ -414,7 +392,7 @@
         const s = ensureSession(key);
         s.picks = { ...(s.picks || {}), [base.id]: next.id };
         s.updated = Date.now();
-        saveLogs();
+        persist(key);
         renderTrain();
       },
     });
@@ -523,8 +501,12 @@
   function renderHistory() {
     const root = $('#view-history');
     if (!state.histEx || !findEx(state.histEx)) {
-      const key = sessionKey(state.dayId);
-      state.histEx = resolveEx(findDay(state.dayId).exercises[0], state.logs.sessions[key]).id;
+      const first = findDay(state.dayId).exercises[0] || state.plan.days.flatMap((d) => d.exercises)[0];
+      if (!first) {
+        root.replaceChildren(h('p', { class: 'empty', text: 'Your plan has no exercises yet. Add some from Menu, Edit plan.' }));
+        return;
+      }
+      state.histEx = resolveEx(first, state.logs.sessions[sessionKey(state.dayId)]).id;
     }
     const ex = findEx(state.histEx);
 
@@ -602,6 +584,290 @@
     return [h('div', { html: svg }), h('p', { class: 'chart-caption', text: measure })];
   }
 
+  /* ================= plan editor ================= */
+
+  const DEFAULT_DAYS = [
+    ['mon', 'Monday', 'Mon', false], ['tue', 'Tuesday', 'Tue', false], ['wed', 'Wednesday', 'Wed', false],
+    ['thu', 'Thursday', 'Thu', false], ['fri', 'Friday', 'Fri', false], ['sat', 'Saturday', 'Sat', true], ['sun', 'Sunday', 'Sun', true],
+  ];
+  const UNITS = [
+    { v: 'reps', label: 'Reps' },
+    { v: 'sec', label: 'Seconds' },
+    { v: 'm', label: 'Meters' },
+    { v: 'min', label: 'Minutes' },
+  ];
+
+  function blankPlan() {
+    return {
+      version: 1,
+      warmup: { name: 'Warm-up', minutes: 10 },
+      notes: [],
+      days: DEFAULT_DAYS.map(([id, name, short, optional]) => ({ id, name, short, optional, focus: '', stair: '', exercises: [] })),
+    };
+  }
+
+  function newExercise() {
+    return {
+      id: `ex-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      name: '', sets: 3, target: 10, unit: 'reps', perSide: false,
+      weighted: true, weight: null, inc: 5, rest: 90, load: '', why: '',
+    };
+  }
+
+  // Accepts a plan saved from this app (.json) or the old setup/plan.js file.
+  function parsePlanText(text) {
+    const plan = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));
+    if (!plan || !Array.isArray(plan.days) || !plan.days.every((d) => d.id && d.name && Array.isArray(d.exercises))) {
+      throw new Error('That file does not look like a training plan.');
+    }
+    return plan;
+  }
+
+  function openEditor() {
+    state.draft = structuredClone(state.plan);
+    state.openEx = new Set();
+    state.view = 'edit';
+    window.scrollTo(0, 0);
+    render();
+  }
+
+  function closeEditor() {
+    state.draft = null;
+    state.view = 'train';
+    if (!state.plan.days.some((d) => d.id === state.dayId)) state.dayId = state.plan.days[0].id;
+    window.scrollTo(0, 0);
+    render();
+  }
+
+  // Fills gaps and turns typed text into numbers. Returns { message, exId } for a problem, or null.
+  function cleanDraft(plan) {
+    for (const day of plan.days) {
+      for (const ex of day.exercises) {
+        ex.name = String(ex.name || '').trim();
+        if (!ex.name) {
+          state.dayId = day.id;
+          state.openEx.add(ex.id);
+          return { message: `Every exercise on ${day.name} needs a name.`, exId: ex.id };
+        }
+        ex.sets = Math.max(1, Math.round(num(ex.sets) ?? 1));
+        ex.target = Math.max(1, num(ex.target) ?? 1);
+        ex.rest = Math.max(0, Math.round(num(ex.rest) ?? 0));
+        ex.weight = ex.weighted ? num(ex.weight) : null;
+        ex.inc = ex.weighted ? Math.max(0, num(ex.inc) ?? 0) : 0;
+        ex.why = String(ex.why || '').trim();
+        ex.load = String(ex.load || '').trim() || (!ex.weighted ? 'bodyweight' : ex.weight != null ? `${fmt(ex.weight)} lb` : 'a weight at RPE 7');
+      }
+    }
+    plan.notes = (plan.notes || []).map((n) => String(n).trim()).filter(Boolean);
+    return null;
+  }
+
+  async function saveDraft(asTemplate) {
+    const problem = cleanDraft(state.draft);
+    if (problem) {
+      toast(problem.message);
+      render();
+      $(`[data-ex="${problem.exId}"] input`)?.focus();
+      return;
+    }
+    const plan = state.draft;
+    if (asTemplate) {
+      Cloud.saveTemplate(structuredClone(plan)).then(
+        () => toast('Saved as the starting plan for new members.'),
+        (err) => toast(`Could not save the template: ${err.message}`)
+      );
+      return;
+    }
+    state.plan = plan;
+    Cloud.savePlan(state.user.uid, plan).catch(() => {});
+    $('#m-notes').replaceChildren(...(plan.notes || []).map((n) => h('p', { text: n })));
+    toast('Plan saved.');
+    closeEditor();
+  }
+
+  function field(label, input, cls = '') {
+    return h('label', { class: `field ${cls}` }, label, input);
+  }
+  function textIn(obj, prop, attrs = {}, onchange) {
+    return h('input', {
+      type: 'text',
+      value: obj[prop] ?? '',
+      ...attrs,
+      oninput: (e) => {
+        obj[prop] = e.target.value;
+        if (onchange) onchange(e.target.value);
+      },
+    });
+  }
+  const numIn = (obj, prop, attrs = {}) => textIn(obj, prop, { inputmode: 'decimal', autocomplete: 'off', ...attrs });
+  function checkIn(label, obj, prop, rerender) {
+    return h(
+      'label',
+      { class: 'check' },
+      h('input', {
+        type: 'checkbox',
+        checked: !!obj[prop],
+        onchange: (e) => {
+          obj[prop] = e.target.checked;
+          if (rerender) renderEdit();
+        },
+      }),
+      label
+    );
+  }
+
+  function renderEditExercise(day, ex, i) {
+    const list = day.exercises;
+    const summaryName = h('span', { class: 'ed-name', text: ex.name || 'New exercise' });
+    const move = (to) => {
+      list.splice(i, 1);
+      list.splice(to, 0, ex);
+      renderEdit();
+    };
+    let armed = false;
+    const remove = h('button', {
+      type: 'button',
+      class: 'ghost danger',
+      text: 'Remove',
+      onclick: (e) => {
+        // Two taps instead of a confirm dialog. Logged history for it is kept either way.
+        if (!armed) {
+          armed = true;
+          e.target.textContent = 'Tap again to remove';
+          return;
+        }
+        list.splice(i, 1);
+        state.openEx.delete(ex.id);
+        renderEdit();
+      },
+    });
+
+    const details = h(
+      'details',
+      { class: 'ed-ex', open: state.openEx.has(ex.id), 'data-ex': ex.id },
+      h('summary', null, summaryName, h('span', { class: 'rx', text: rxText({ ...ex, sets: num(ex.sets) ?? ex.sets, target: num(ex.target) ?? ex.target }) })),
+      h(
+        'div',
+        { class: 'ed-grid' },
+        field('Name', textIn(ex, 'name', { placeholder: 'e.g. Leg press' }, (v) => (summaryName.textContent = v || 'New exercise')), 'span2'),
+        field('Why (optional)', textIn(ex, 'why'), 'span2'),
+        field('Sets', numIn(ex, 'sets', { inputmode: 'numeric' })),
+        field('Target per set', numIn(ex, 'target')),
+        field(
+          'Measured in',
+          h(
+            'select',
+            {
+              onchange: (e) => {
+                ex.unit = e.target.value;
+                renderEdit();
+              },
+            },
+            UNITS.map((u) => h('option', { value: u.v, text: u.label, selected: u.v === ex.unit }))
+          )
+        ),
+        field('Rest (seconds)', numIn(ex, 'rest', { inputmode: 'numeric' })),
+        h('div', { class: 'span2 ed-checks' }, checkIn('Per arm or leg', ex, 'perSide'), checkIn('Uses weight', ex, 'weighted', true)),
+        ex.weighted
+          ? [
+              field('Start weight (lb, blank = by feel)', numIn(ex, 'weight')),
+              field('Add when every set hits target (lb)', numIn(ex, 'inc')),
+              field('Starting load note (optional)', textIn(ex, 'load', { placeholder: 'e.g. a weight at RPE 7' }), 'span2'),
+            ]
+          : null
+      ),
+      h(
+        'div',
+        { class: 'ed-row' },
+        h('button', { type: 'button', class: 'ghost', text: 'Move up', disabled: i === 0, onclick: () => move(i - 1) }),
+        h('button', { type: 'button', class: 'ghost', text: 'Move down', disabled: i === list.length - 1, onclick: () => move(i + 1) }),
+        remove
+      )
+    );
+    details.addEventListener('toggle', () => (details.open ? state.openEx.add(ex.id) : state.openEx.delete(ex.id)));
+    return h('li', null, details);
+  }
+
+  function renderEdit() {
+    const plan = state.draft;
+    const day = findDay(state.dayId);
+    const scrollY = window.scrollY;
+    plan.warmup = plan.warmup || { name: '', minutes: '' };
+    const notes = h('textarea', {
+      rows: 3,
+      oninput: (e) => (plan.notes = e.target.value.split('\n')),
+    });
+    notes.value = (plan.notes || []).join('\n');
+
+    const fileIn = h('input', {
+      type: 'file',
+      accept: '.json,.js,application/json,text/javascript',
+      onchange: async (e) => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        try {
+          state.draft = parsePlanText(await file.text());
+          state.openEx = new Set();
+          toast('Plan loaded. Check it over, then save.');
+          render();
+        } catch (err) {
+          toast(err.message || 'Could not read that file.');
+        }
+      },
+    });
+
+    const root = $('#view-edit');
+    root.replaceChildren();
+    append(root, [
+      h(
+        'section',
+        { class: 'ed-day' },
+        h('h2', { text: day.name }),
+        field('Focus', textIn(day, 'focus', { placeholder: 'e.g. Lower strength' })),
+        field('Warm-up note', textIn(day, 'stair', { placeholder: 'e.g. Zone 2, easy pace' })),
+        field('Note shown at the top (optional)', textIn(day, 'note')),
+        checkIn('Optional day', day, 'optional', true)
+      ),
+      h('ol', { class: 'ed-list' }, day.exercises.map((ex, i) => renderEditExercise(day, ex, i))),
+      h('button', {
+        type: 'button',
+        class: 'ghost wide',
+        text: `Add an exercise to ${day.name}`,
+        onclick: () => {
+          const ex = newExercise();
+          day.exercises.push(ex);
+          state.openEx.add(ex.id);
+          renderEdit();
+          root.querySelector(`[data-ex="${ex.id}"] input`)?.focus();
+        },
+      }),
+      h(
+        'section',
+        { class: 'ed-all' },
+        h('h2', { text: 'Every day' }),
+        h(
+          'div',
+          { class: 'ed-grid' },
+          field('Warm-up (blank hides it)', textIn(plan.warmup, 'name', { placeholder: 'e.g. StairMaster' })),
+          field('Warm-up minutes', numIn(plan.warmup, 'minutes')),
+          field('Notes in the menu, one per line', notes, 'span2')
+        ),
+        h('label', { class: 'ghost wide file-btn' }, 'Replace the whole plan from a file', fileIn)
+      ),
+      h(
+        'div',
+        { class: 'ed-actions' },
+        h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: closeEditor }),
+        h('button', { type: 'button', class: 'primary', text: 'Save plan', onclick: () => saveDraft(false) })
+      ),
+      state.admin
+        ? h('button', { type: 'button', class: 'ghost wide', text: 'Also use this as the starting plan for new members', onclick: () => saveDraft(true) })
+        : null,
+    ]);
+    window.scrollTo(0, scrollY);
+  }
+
   /* ================= backup ================= */
 
   function download(filename, text) {
@@ -613,36 +879,32 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  async function exportBackup() {
-    await saveLogs();
+  function exportBackup() {
     const payload = {
       kind: 'tt-training-backup',
-      version: 1,
+      version: 2,
       exported: new Date().toISOString(),
-      logs: JSON.parse(localStorage.getItem(LOG_KEY) || 'null'),
-      orphaned: localStorage.getItem(ORPHAN_KEY),
+      plan: state.plan,
+      sessions: state.logs.sessions,
     };
-    download(`training-backup-${localISO()}.json`, JSON.stringify(payload));
-    toast('Backup exported. It stays encrypted with your credentials.');
+    download(`training-backup-${localISO()}.json`, JSON.stringify(payload, null, 1));
+    toast('Backup exported. Your logs are also saved to your account.');
   }
 
   async function importBackup(file) {
     try {
       const data = JSON.parse(await file.text());
-      if (data.kind !== 'tt-training-backup' || !data.logs) throw new Error('That file is not a training backup.');
-      if (data.logs.salt !== state.vault.kdf.salt) {
-        throw new Error('This backup was made with a different username or password. Sign in with those to open it.');
-      }
-      const imported = await Vault.decryptWithKey(state.key, data.logs.box);
+      if (data.kind !== 'tt-training-backup') throw new Error('That file is not a training backup.');
+      if (!data.sessions) throw new Error('That backup is from the old password version of the app and can’t be opened here.');
       let n = 0;
-      for (const [k, s] of Object.entries(imported.sessions || {})) {
+      for (const [k, s] of Object.entries(data.sessions)) {
         const mine = state.logs.sessions[k];
         if (!mine || (s.updated || 0) > (mine.updated || 0)) {
           state.logs.sessions[k] = s;
+          persist(k);
           n++;
         }
       }
-      await saveLogs();
       render();
       toast(n ? `Imported ${n} session${n === 1 ? '' : 's'}.` : 'Nothing new in that backup.');
     } catch (err) {
@@ -650,81 +912,119 @@
     }
   }
 
-  /* ================= boot + login ================= */
+  /* ================= sign in ================= */
+
+  const AUTH_ERRORS = {
+    'auth/invalid-credential': 'Email or password is incorrect.',
+    'auth/wrong-password': 'Email or password is incorrect.',
+    'auth/user-not-found': 'Email or password is incorrect.',
+    'auth/invalid-email': 'That email address doesn’t look right.',
+    'auth/too-many-requests': 'Too many tries. Wait a few minutes, or reset your password.',
+    'auth/network-request-failed': 'No connection. Signing in the first time needs the internet.',
+    'auth/user-disabled': 'This account has been turned off.',
+  };
 
   function showLogin(message) {
     $('#app').hidden = true;
     $('#login').hidden = false;
     $('#login-msg').textContent = message || '';
-    $('#username').focus();
+    $('#login-btn').disabled = false;
+    $('#login-btn').textContent = 'Sign in';
   }
 
-  async function start(key, plan) {
-    state.key = key;
+  async function enter(user) {
+    $('#login-btn').textContent = 'Loading';
+    try {
+      let member = null;
+      try {
+        member = await Cloud.membership(user.email || '');
+      } catch (err) {
+        if (err.code !== 'unavailable') throw err;
+        member = {}; // offline: trust the cached session, the rules still guard the data
+      }
+      if (!member) {
+        await Cloud.signOutUser({ wipe: false });
+        showLogin(`${user.email} hasn’t been invited yet. Ask the owner to add you.`);
+        return;
+      }
+      state.user = user;
+      state.admin = member.admin === true;
+
+      let plan = await Cloud.loadPlan(user.uid);
+      let fresh = false;
+      if (!plan) {
+        plan = (await Cloud.loadTemplate()) || blankPlan();
+        fresh = !plan.days.some((d) => d.exercises.length);
+        Cloud.savePlan(user.uid, plan).catch(() => {});
+      }
+      state.logs.sessions = await Cloud.loadSessions(user.uid);
+      start(plan);
+      if (fresh) {
+        toast('Welcome. Add your exercises to get started.');
+        openEditor();
+      }
+    } catch (err) {
+      showLogin(err.code === 'permission-denied' ? 'This account doesn’t have access. Ask the owner.' : `Could not load your plan: ${err.message}`);
+    }
+  }
+
+  function start(plan) {
     state.plan = plan;
-    await loadLogs();
+    state.view = 'train';
     const todayId = DAY_IDS[new Date().getDay()];
     state.dayId = plan.days.some((d) => d.id === todayId) ? todayId : plan.days[0].id;
 
+    $('#m-user').textContent = `Signed in as ${state.user.email}`;
     $('#m-notes').replaceChildren(...(plan.notes || []).map((n) => h('p', { text: n })));
     $('#login').hidden = true;
     $('#app').hidden = false;
     render();
   }
 
-  async function boot() {
-    if (!window.crypto || !crypto.subtle) {
-      showLogin('This page needs HTTPS to unlock. Open it from your github.io address.');
+  function boot() {
+    if (!Cloud.configured) {
+      showLogin('Firebase isn’t set up yet. Fill in firebase-config.js and upload it.');
       $('#login-btn').disabled = true;
       return;
     }
-    try {
-      const res = await fetch('vault.json', { cache: 'no-store' });
-      if (!res.ok) throw new Error(String(res.status));
-      state.vault = await res.json();
-    } catch {
-      showLogin('vault.json was not found next to index.html. Create it with setup.html and upload it.');
-      $('#login-btn').disabled = true;
-      return;
-    }
-
-    try {
-      const saved = await idbGet('session');
-      if (saved && saved.salt === state.vault.kdf.salt) {
-        const plan = await Vault.decryptWithKey(saved.key, state.vault.data);
-        return start(saved.key, plan);
-      }
-    } catch {
-      /* no saved session, or it no longer matches: fall through to login */
-    }
-    showLogin();
+    Cloud.onSync(showSync);
+    let first = true;
+    Cloud.onUser((user) => {
+      if (user) enter(user);
+      else if (first || !state.user) showLogin();
+      first = false;
+    });
   }
 
   $('#login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = $('#login-btn');
-    const user = $('#username').value;
-    const pass = $('#password').value;
     btn.disabled = true;
-    btn.textContent = 'Unlocking';
+    btn.textContent = 'Signing in';
     $('#login-msg').textContent = '';
     try {
-      const { key, plan } = await Vault.unlock(state.vault, user, pass);
-      try {
-        if ($('#remember').checked) await idbSet('session', { key, salt: state.vault.kdf.salt });
-        else await idbDel('session');
-      } catch {
-        /* private browsing can block IndexedDB; signing in still works */
-      }
+      await Cloud.signIn($('#email').value, $('#password').value, $('#remember').checked);
       $('#password').value = '';
-      await start(key, plan);
-    } catch {
-      $('#login-msg').textContent = 'Username or password is incorrect.';
+      // onUser takes it from here
+    } catch (err) {
+      showLogin(AUTH_ERRORS[err.code] || `Could not sign in: ${err.message}`);
       $('#password').select();
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Unlock';
     }
+  });
+
+  $('#forgot').addEventListener('click', async () => {
+    const email = $('#email').value.trim();
+    if (!email) {
+      $('#login-msg').textContent = 'Type your email above first, then tap Forgot password.';
+      $('#email').focus();
+      return;
+    }
+    try {
+      await Cloud.resetPassword(email);
+    } catch {
+      /* same message either way, so the form doesn't reveal who has an account */
+    }
+    $('#login-msg').textContent = `If ${email} has an account, a reset link is on its way.`;
   });
 
   $('#btn-history').addEventListener('click', () => {
@@ -734,13 +1034,14 @@
   });
 
   const menu = $('#menu');
-  $('#btn-menu').addEventListener('click', () => {
-    $('#m-orphan').hidden = !localStorage.getItem(ORPHAN_KEY);
-    menu.showModal();
-  });
+  $('#btn-menu').addEventListener('click', () => menu.showModal());
   $('#m-close').addEventListener('click', () => menu.close());
   menu.addEventListener('click', (e) => {
     if (e.target === menu) menu.close(); // tap on backdrop
+  });
+  $('#m-edit').addEventListener('click', () => {
+    menu.close();
+    if (state.view !== 'edit') openEditor();
   });
   $('#m-export').addEventListener('click', exportBackup);
   $('#m-import').addEventListener('change', async (e) => {
@@ -751,13 +1052,8 @@
       await importBackup(file);
     }
   });
-  $('#m-lock').addEventListener('click', async () => {
-    await saveChain;
-    try {
-      await idbDel('session');
-    } catch {
-      /* ignore */
-    }
+  $('#m-signout').addEventListener('click', async () => {
+    await Cloud.signOutUser();
     location.reload();
   });
 
@@ -776,4 +1072,4 @@
   $('#timer-skip').addEventListener('click', stopTimer);
 
   boot();
-})();
+}

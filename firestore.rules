@@ -1,0 +1,42 @@
+rules_version = '2';
+
+// Paste this into Firebase console → Firestore Database → Rules, then Publish.
+//
+// members/{email}           invite list, one document per person, added by you in the console.
+//                           Add the field  admin: true  on your own to manage the new member template.
+// users/{uid}               that person's plan
+// users/{uid}/sessions/{id} that person's logged sessions
+// templates/default         the plan copied to a new member on first sign in
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function email() {
+      return request.auth.token.email.lower();
+    }
+    function member() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && exists(/databases/$(database)/documents/members/$(email()));
+    }
+    function admin() {
+      return member()
+        && get(/databases/$(database)/documents/members/$(email())).data.get('admin', false) == true;
+    }
+
+    match /members/{address} {
+      allow read: if request.auth != null && request.auth.token.email != null && email() == address;
+    }
+
+    match /users/{uid} {
+      allow read, write: if member() && request.auth.uid == uid;
+
+      match /sessions/{session} {
+        allow read, write: if member() && request.auth.uid == uid;
+      }
+    }
+
+    match /templates/{name} {
+      allow read: if member();
+      allow write: if admin();
+    }
+  }
+}
