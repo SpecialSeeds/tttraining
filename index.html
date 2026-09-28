@@ -58,10 +58,34 @@
   </div>
 
   <div id="timer" class="timer" role="timer" hidden>
-    <span class="ballc" aria-hidden="true"></span>
+    <button type="button" id="timer-play" class="ballc" aria-label="Play a minigame while you rest">Play</button>
     <span class="time"><span class="time-label">Rest</span> <span id="timer-time">1:30</span></span>
-    <button type="button" id="timer-more">+15 s</button>
+    <button type="button" id="timer-less" aria-label="15 seconds less">−15 s</button>
+    <button type="button" id="timer-more" aria-label="15 seconds more">+15 s</button>
     <button type="button" id="timer-skip">Skip</button>
+  </div>
+
+  <div id="games" class="games" role="dialog" aria-modal="true" aria-label="Minigames" hidden>
+    <div class="games-top">
+      <div class="seg games-tabs">
+        <button type="button" data-game="rally" aria-pressed="false">Rally</button>
+        <button type="button" data-game="drop" aria-pressed="false">Drop</button>
+        <button type="button" data-game="react" aria-pressed="false">React</button>
+      </div>
+      <button type="button" id="games-close" class="ghost">Close</button>
+    </div>
+    <div class="games-status">
+      <span id="games-rest" role="timer">Rest</span>
+      <button type="button" id="games-more" class="ghost">+15 s</button>
+    </div>
+    <div class="games-stage">
+      <canvas id="games-canvas" aria-label="Game"></canvas>
+      <div id="games-over" class="games-over" role="alert" hidden>
+        <p>Rest is over. Next set.</p>
+        <button type="button" id="games-back" class="primary wide">Back to training</button>
+        <button type="button" id="games-keep" class="ghost wide">Keep playing</button>
+      </div>
+    </div>
   </div>
 
   <div id="toast" class="toast" role="status" hidden></div>
@@ -77,6 +101,7 @@
         Logs saved under a previous username or password are still on this device.
         Export a backup to keep them; they only open with the credentials that created them.
       </p>
+      <button type="button" id="m-games" class="ghost wide">Minigames</button>
       <button type="button" id="m-lock" class="ghost wide">Lock and sign out</button>
     </div>
     <div id="m-notes" class="plan-notes"></div>
@@ -84,6 +109,8 @@
   </dialog>
 
   <script src="crypto.js"></script>
+  <script src="variants.js"></script>
   <script src="app.js"></script>
+  <script src="games.js"></script>
 </body>
 </html>

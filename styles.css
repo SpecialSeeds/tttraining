@@ -152,12 +152,33 @@ button { -webkit-tap-highlight-color: transparent; }
 .warmup h2 { font: 600 24px/1.1 var(--display); margin: 0; }
 .warmup p { margin: 2px 0 0; color: var(--mist); font-size: 15px; }
 
+/* ---------- equipment + rest switches ---------- */
+.prefs { display: grid; gap: 8px; margin: 0 0 18px; }
+.pref { display: grid; grid-template-columns: 5.6em 1fr; align-items: center; gap: 10px; }
+.pref-label { font-size: 14px; color: var(--mist); }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid rgba(243, 246, 250, 0.42); border-radius: var(--radius); overflow: hidden; }
+.seg button { background: transparent; border: 0; padding: 8px 4px; font: 600 17px/1 var(--display); letter-spacing: 0.02em; color: var(--mist); cursor: pointer; }
+.seg button + button { border-left: 1px solid rgba(243, 246, 250, 0.2); }
+.seg button[aria-pressed="true"] { background: var(--line); color: var(--table); }
+
 .exercises { list-style: none; margin: 0; padding: 0; }
 .ex { padding: 18px 0 16px; border-bottom: 1px solid var(--line-soft); }
 .ex-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
 .ex h3 { font: 600 25px/1.1 var(--display); margin: 0; }
 .rx { font: 600 20px/1 var(--display); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .why { margin: 4px 0 0; color: var(--mist); font-size: 15px; }
+.kind {
+  display: inline-block; margin-right: 8px; padding: 1px 7px;
+  border: 1px solid var(--mist); border-radius: 99px;
+  font: 600 13px/1.4 var(--display); letter-spacing: 0.04em; text-transform: uppercase;
+}
+.swap {
+  margin-left: 8px; padding: 0;
+  background: none; border: 0;
+  color: var(--line); font-size: 15px;
+  text-decoration: underline; text-underline-offset: 3px;
+  cursor: pointer;
+}
 .meta { margin: 8px 0 12px; font-size: 15px; }
 .meta .last { display: block; color: var(--mist); }
 
@@ -237,20 +258,50 @@ button { -webkit-tap-highlight-color: transparent; }
   box-shadow: 0 10px 28px rgba(3, 12, 25, 0.45);
   z-index: 10;
 }
-.timer .ballc { width: 44px; height: 44px; border-radius: 50%; background: var(--ball); flex-shrink: 0; }
+.timer .ballc {
+  width: 44px; height: 44px; padding: 0;
+  border: 0; border-radius: 50%;
+  background: var(--ball); flex-shrink: 0;
+  font: 700 15px/1 var(--display); letter-spacing: 0.02em; color: var(--deep);
+}
 .timer .time { flex: 1; font: 700 30px/1 var(--display); font-variant-numeric: tabular-nums; }
 .timer .time-label { font-size: 18px; font-weight: 600; color: #4B6485; }
 .timer button {
   background: transparent;
   border: 1px solid rgba(14, 42, 75, 0.35);
   border-radius: 99px;
-  padding: 9px 14px;
+  padding: 9px 12px;
   font-weight: 600;
+  white-space: nowrap;
   color: var(--deep);
   cursor: pointer;
 }
 .timer.over .ballc { animation: bounce 0.45s ease-in-out 4; }
 @keyframes bounce { 50% { transform: translateY(-9px); } }
+
+/* ---------- minigames ---------- */
+.games-open, .games-open body { overflow: hidden; overscroll-behavior: none; }
+.games {
+  position: fixed; inset: 0; z-index: 15;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--deep);
+  padding: calc(12px + env(safe-area-inset-top, 0px)) calc(16px + env(safe-area-inset-right, 0px))
+           calc(12px + env(safe-area-inset-bottom, 0px)) calc(16px + env(safe-area-inset-left, 0px));
+}
+.games-top { display: flex; gap: 10px; align-items: stretch; max-width: 528px; width: 100%; margin: 0 auto; }
+.games-tabs { flex: 1; }
+.games-tabs button { padding: 11px 4px; font-size: 19px; }
+.games-status { display: flex; justify-content: space-between; align-items: center; gap: 10px; max-width: 528px; width: 100%; margin: 0 auto; min-height: 38px; }
+#games-rest { font: 700 26px/1 var(--display); font-variant-numeric: tabular-nums; }
+.games-stage { position: relative; flex: 1; min-height: 0; }
+.games-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
+.games-over {
+  position: absolute; inset: 0;
+  display: grid; align-content: center; justify-items: center; gap: 12px;
+  padding: 24px; background: rgba(5, 15, 30, 0.8);
+}
+.games-over p { font: 700 36px/1.1 var(--display); margin: 0 0 8px; text-align: center; }
+.games-over .wide { max-width: 320px; }
 
 /* ---------- toast + dialog ---------- */
 .toast {
@@ -286,4 +337,7 @@ dialog h2 { font: 700 32px/1 var(--display); margin: 0 0 16px; }
   .set { grid-template-columns: 18px minmax(0, 1fr) 10px minmax(0, 1fr) 44px; gap: 6px; }
   .tick { width: 44px; height: 44px; }
   .day { font-size: 17px; }
+  .timer { gap: 6px; }
+  .timer .ballc { width: 36px; height: 36px; }
+  .timer button { padding: 8px 9px; }
 }

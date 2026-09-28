@@ -4,6 +4,18 @@
   const DAY_IDS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
   const LOG_KEY = 'tt.logs.v1';
   const ORPHAN_KEY = 'tt.logs.orphaned';
+  const PREF_KEY = 'tt.prefs';
+  const EQUIP = [
+    { v: 'machine', label: 'Machines' },
+    { v: 'mixed', label: 'Mixed' },
+    { v: 'free', label: 'Free' },
+  ];
+  const REST = [
+    { v: 1, label: 'Full' },
+    { v: 0.75, label: 'Shorter' },
+    { v: 0.5, label: 'Rushed' },
+  ];
+  const KIND_LABEL = { machine: 'Machine', free: 'Free' };
   const UNIT = { reps: 'reps', sec: 's', m: 'm', min: 'min' };
   const CHECK_SVG =
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" ' +
@@ -17,6 +29,7 @@
     dayId: null,
     view: 'train',
     histEx: null,
+    prefs: loadPrefs(),
   };
 
   /* ================= helpers ================= */
@@ -68,6 +81,26 @@
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => (t.hidden = true), 3800);
+  }
+
+  /* ================= device preferences (not encrypted, nothing personal) ================= */
+
+  function loadPrefs() {
+    const prefs = { equip: 'machine', rest: 1 };
+    try {
+      Object.assign(prefs, JSON.parse(localStorage.getItem(PREF_KEY) || '{}'));
+    } catch {
+      /* storage blocked or corrupt: use defaults */
+    }
+    return prefs;
+  }
+
+  function savePrefs() {
+    try {
+      localStorage.setItem(PREF_KEY, JSON.stringify(state.prefs));
+    } catch {
+      /* ignore */
+    }
   }
 
   /* ================= IndexedDB: optional "stay signed in" ================= */
@@ -126,7 +159,37 @@
   /* ================= plan + session model ================= */
 
   const findDay = (id) => state.plan.days.find((d) => d.id === id) || state.plan.days[0];
-  const allExercises = () => state.plan.days.flatMap((d) => d.exercises.map((ex) => ({ ...ex, dayId: d.id })));
+  // The plan exercise plus its machine and free weight swaps (variants.js, or `alts` in the plan).
+  function variantsOf(base) {
+    const alts = { ...((window.VARIANTS || {})[base.id] || {}), ...(base.alts || {}) };
+    const out = [{ ...base, kind: 'plan', baseId: base.id }];
+    for (const kind of ['machine', 'free']) {
+      if (alts[kind]) out.push({ ...base, ...alts[kind], kind, baseId: base.id });
+    }
+    return out;
+  }
+
+  // Which version to show: a swap picked this session, else whatever already has
+  // sets logged today, else the Equipment setting, else the plan as written.
+  function resolveEx(base, session) {
+    const vs = variantsOf(base);
+    const pick = session && session.picks && session.picks[base.id];
+    return (
+      (pick && vs.find((v) => v.id === pick)) ||
+      vs.find((v) => doneSets(session, v.id).length) ||
+      vs.find((v) => v.kind === state.prefs.equip) ||
+      vs[0]
+    );
+  }
+
+  const restFor = (ex) => {
+    const full = ex.rest ?? 90;
+    return full ? Math.max(15, Math.round((full * state.prefs.rest) / 5) * 5) : 0;
+  };
+  const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+
+  const allExercises = () =>
+    state.plan.days.flatMap((d) => d.exercises.flatMap((ex) => variantsOf(ex).map((v) => ({ ...v, dayId: d.id }))));
   const findEx = (id) => allExercises().find((e) => e.id === id);
   const sessionKey = (dayId) => `${localISO()}|${dayId}`;
 
@@ -198,7 +261,7 @@
 
   function tickTimer() {
     const left = Math.max(0, Math.ceil((timer.end - Date.now()) / 1000));
-    $('#timer-time').textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    $('#timer-time').textContent = fmtClock(left);
     if (left > 0) {
       timer.handle = setTimeout(tickTimer, 250);
       return;
@@ -286,19 +349,75 @@
       },
     });
 
-    const planned = day.exercises.reduce((n, ex) => n + ex.sets, 0);
-    const done = day.exercises.reduce((n, ex) => n + doneSets(session, ex.id).length, 0);
+    const exercises = day.exercises.map((base) => resolveEx(base, session));
+    const planned = exercises.reduce((n, ex) => n + ex.sets, 0);
+    const done = day.exercises.reduce((n, base) => n + variantsOf(base).reduce((m, v) => m + doneSets(session, v.id).length, 0), 0);
 
     const root = $('#view-train');
     root.replaceChildren();
     append(root, [
       h('p', { class: 'logging', text: `Logging for ${fmtLong(localISO())}` }),
+      renderPrefs(),
       day.note ? h('p', { class: 'note', text: day.note }) : null,
       h('div', { class: 'warmup' }, h('div', null, h('h2', { text: `${warm.name}, ${warm.minutes} min` }), h('p', { text: day.stair })), stairTick),
-      h('ol', { class: 'exercises' }, day.exercises.map((ex) => renderExercise(ex, key))),
+      h('ol', { class: 'exercises' }, exercises.map((ex) => renderExercise(ex, key))),
       h('p', { class: 'summary', text: `${done} of ${planned} sets done` }),
     ]);
     window.scrollTo(0, scrollY);
+  }
+
+  function segmented(label, options, current, onpick) {
+    return h(
+      'div',
+      { class: 'pref', role: 'group', 'aria-label': label },
+      h('span', { class: 'pref-label', text: label, 'aria-hidden': 'true' }),
+      h(
+        'div',
+        { class: 'seg' },
+        options.map((o) =>
+          h('button', {
+            type: 'button',
+            text: o.label,
+            'aria-pressed': String(o.v === current),
+            onclick: () => onpick(o.v),
+          })
+        )
+      )
+    );
+  }
+
+  function renderPrefs() {
+    const pick = (field) => (v) => {
+      state.prefs[field] = v;
+      savePrefs();
+      renderTrain();
+    };
+    return h(
+      'div',
+      { class: 'prefs' },
+      segmented('Equipment', EQUIP, state.prefs.equip, pick('equip')),
+      segmented('Rest', REST, state.prefs.rest, pick('rest'))
+    );
+  }
+
+  function renderSwap(ex, key) {
+    const base = findDay(state.dayId).exercises.find((e) => e.id === ex.baseId);
+    const vs = variantsOf(base);
+    if (vs.length < 2) return null;
+    const next = vs[(vs.findIndex((v) => v.id === ex.id) + 1) % vs.length];
+    return h('button', {
+      type: 'button',
+      class: 'swap',
+      text: 'Swap',
+      'aria-label': `Swap ${ex.name} for ${next.name}`,
+      onclick: () => {
+        const s = ensureSession(key);
+        s.picks = { ...(s.picks || {}), [base.id]: next.id };
+        s.updated = Date.now();
+        saveLogs();
+        renderTrain();
+      },
+    });
   }
 
   function renderExercise(ex, key) {
@@ -314,7 +433,14 @@
       'li',
       { class: 'ex' },
       h('div', { class: 'ex-head' }, h('h3', { text: ex.name }), h('span', { class: 'rx', text: rxText(ex) })),
-      h('p', { class: 'why', text: ex.why }),
+      h(
+        'p',
+        { class: 'why' },
+        KIND_LABEL[ex.kind] ? h('span', { class: 'kind', text: KIND_LABEL[ex.kind] }) : null,
+        ex.why,
+        restFor(ex) ? h('span', { class: 'rest', text: ` Rest ${fmtClock(restFor(ex))}.` }) : null,
+        renderSwap(ex, key)
+      ),
       last || sug.text
         ? h(
             'p',
@@ -377,7 +503,7 @@
           const w = wInput ? num(wInput.value) ?? num(wInput.placeholder) : null;
           const r = num(rInput.value) ?? ex.target;
           setEntry(key, ex.id, i, { w, r, done: true });
-          startTimer(ex.rest ?? 90);
+          startTimer(restFor(ex));
         }
         renderTrain();
       },
@@ -396,7 +522,10 @@
 
   function renderHistory() {
     const root = $('#view-history');
-    if (!state.histEx || !findEx(state.histEx)) state.histEx = findDay(state.dayId).exercises[0].id;
+    if (!state.histEx || !findEx(state.histEx)) {
+      const key = sessionKey(state.dayId);
+      state.histEx = resolveEx(findDay(state.dayId).exercises[0], state.logs.sessions[key]).id;
+    }
     const ex = findEx(state.histEx);
 
     const select = h('select', {
@@ -407,7 +536,13 @@
     });
     for (const day of state.plan.days) {
       select.append(
-        h('optgroup', { label: day.name }, day.exercises.map((e) => h('option', { value: e.id, text: e.name, selected: e.id === ex.id })))
+        h(
+          'optgroup',
+          { label: day.name },
+          day.exercises.flatMap(variantsOf).map((e) =>
+            h('option', { value: e.id, text: KIND_LABEL[e.kind] ? `${e.name} (${KIND_LABEL[e.kind].toLowerCase()})` : e.name, selected: e.id === ex.id })
+          )
+        )
       );
     }
 
@@ -630,6 +765,11 @@
     timer.end = Math.max(timer.end, Date.now()) + 15000;
     $('#timer').classList.remove('over');
     clearTimeout(timer.hide);
+    clearTimeout(timer.handle);
+    tickTimer();
+  });
+  $('#timer-less').addEventListener('click', () => {
+    timer.end -= 15000;
     clearTimeout(timer.handle);
     tickTimer();
   });
