@@ -27,6 +27,7 @@ import * as Cloud from './cloud.js';
     plan: null,
     draft: null,
     openEx: new Set(),
+    openForm: new Set(),
     logs: { sessions: {} },
     dayId: null,
     view: 'train',
@@ -336,9 +337,11 @@ import * as Cloud from './cloud.js';
       warm.name
         ? h('div', { class: 'warmup' }, h('div', null, h('h2', { text: warm.minutes ? `${warm.name}, ${warm.minutes} min` : warm.name }), day.stair ? h('p', { text: day.stair }) : null), stairTick)
         : null,
+      renderStretches('pre', key),
       exercises.length
         ? [h('ol', { class: 'exercises' }, exercises.map((ex) => renderExercise(ex, key))), h('p', { class: 'summary', text: `${done} of ${planned} sets done` })]
         : h('p', { class: 'empty', text: 'Nothing planned for this day. Add exercises from Menu, Edit plan.' }),
+      renderStretches('post', key),
     ]);
     showSync(syncPending);
     window.scrollTo(0, scrollY);
@@ -398,6 +401,95 @@ import * as Cloud from './cloud.js';
     });
   }
 
+  /* ---------- form diagrams + stretches ---------- */
+
+  const stretchesOf = (plan) => plan.stretches || (window.Forms && window.Forms.stretches) || { pre: [], post: [] };
+  const hasForm = (id) => !!(window.Forms && window.Forms.has(id));
+
+  // Tapping a name shows stick figures for each phase of the movement.
+  function formToggle(id, name, tag) {
+    if (!hasForm(id)) return h(tag, { text: name });
+    const open = state.openForm.has(id);
+    return h(
+      tag,
+      null,
+      h('button', {
+        type: 'button',
+        class: 'form-btn',
+        'aria-expanded': String(open),
+        onclick: () => {
+          open ? state.openForm.delete(id) : state.openForm.add(id);
+          renderTrain();
+        },
+      }, name, h('span', { class: 'form-hint', text: open ? 'Hide form' : 'Form', 'aria-hidden': 'true' }))
+    );
+  }
+
+  function renderForm(id) {
+    if (!state.openForm.has(id) || !hasForm(id)) return null;
+    const form = window.Forms.get(id);
+    return h(
+      'div',
+      { class: 'form' },
+      h(
+        'div',
+        { class: 'form-frames' },
+        form.frames.map((fr, i) =>
+          h('figure', null, h('div', { html: fr.svg }), h('figcaption', null, h('b', { text: `${i + 1}. ${fr.label}` }), ' ', fr.cue))
+        )
+      ),
+      form.ret ? h('p', { class: 'form-ret' }, h('b', { text: 'Return. ' }), form.ret) : null
+    );
+  }
+
+  const doseText = (st) => `${st.target}${st.unit === 'sec' ? ' s' : ''}${st.perSide ? ' each' : ''}`;
+
+  function renderStretches(which, key) {
+    const list = stretchesOf(state.plan)[which] || [];
+    if (!list.length) return null;
+    const session = state.logs.sessions[key];
+    const doneMap = (session && session.stretched) || {};
+    const title = which === 'pre' ? 'Stretch before you lift' : 'Stretch after';
+    const sub = which === 'pre' ? 'Moving stretches, after the warm-up.' : 'Hold each one and breathe.';
+    return h(
+      'section',
+      { class: `stretches ${which}` },
+      h('div', { class: 'st-head' }, h('h2', { text: title }), h('p', { text: `${sub} ${list.filter((st) => doneMap[st.id]).length} of ${list.length} done.` })),
+      h(
+        'ol',
+        { class: 'st-list' },
+        list.map((st) => {
+          const done = !!doneMap[st.id];
+          return h(
+            'li',
+            { class: done ? 'done' : null },
+            h(
+              'div',
+              { class: 'st-row' },
+              formToggle(st.id, st.name, 'span'),
+              h('span', { class: 'st-dose', text: doseText(st) }),
+              h('button', {
+                type: 'button',
+                class: 'tick small',
+                'aria-pressed': String(done),
+                'aria-label': done ? `Mark ${st.name} not done` : `Mark ${st.name} done`,
+                html: CHECK_SVG,
+                onclick: () => {
+                  const s = ensureSession(key);
+                  s.stretched = { ...(s.stretched || {}), [st.id]: !done };
+                  s.updated = Date.now();
+                  persist(key);
+                  renderTrain();
+                },
+              })
+            ),
+            renderForm(st.id)
+          );
+        })
+      )
+    );
+  }
+
   function renderExercise(ex, key) {
     const last = lastPerformance(ex.id, key);
     const sug = suggest(ex, last);
@@ -410,7 +502,8 @@ import * as Cloud from './cloud.js';
     return h(
       'li',
       { class: 'ex' },
-      h('div', { class: 'ex-head' }, h('h3', { text: ex.name }), h('span', { class: 'rx', text: rxText(ex) })),
+      h('div', { class: 'ex-head' }, formToggle(ex.id, ex.name, 'h3'), h('span', { class: 'rx', text: rxText(ex) })),
+      renderForm(ex.id),
       h(
         'p',
         { class: 'why' },
@@ -625,6 +718,7 @@ import * as Cloud from './cloud.js';
 
   function openEditor() {
     state.draft = structuredClone(state.plan);
+    state.draft.stretches = structuredClone(stretchesOf(state.plan));
     state.openEx = new Set();
     state.view = 'edit';
     window.scrollTo(0, 0);
@@ -659,6 +753,14 @@ import * as Cloud from './cloud.js';
       }
     }
     plan.notes = (plan.notes || []).map((n) => String(n).trim()).filter(Boolean);
+    for (const which of ['pre', 'post']) {
+      const list = (plan.stretches && plan.stretches[which]) || [];
+      for (const st of list) {
+        st.name = String(st.name || '').trim();
+        st.target = Math.max(1, num(st.target) ?? 1);
+      }
+      if (plan.stretches) plan.stretches[which] = list.filter((st) => st.name);
+    }
     return null;
   }
 
@@ -788,8 +890,53 @@ import * as Cloud from './cloud.js';
     return h('li', null, details);
   }
 
+  function renderEditStretches(plan, which, label) {
+    const list = plan.stretches[which];
+    return h(
+      'div',
+      { class: 'span2 ed-stretches' },
+      h('h3', { text: label }),
+      h(
+        'ol',
+        { class: 'ed-st-list' },
+        list.map((st, i) =>
+          h(
+            'li',
+            null,
+            field('Name', textIn(st, 'name'), 'span2'),
+            field('Amount', numIn(st, 'target')),
+            field(
+              'Measured in',
+              h('select', { onchange: (e) => (st.unit = e.target.value) }, [
+                h('option', { value: 'reps', text: 'Reps', selected: st.unit === 'reps' }),
+                h('option', { value: 'sec', text: 'Seconds', selected: st.unit === 'sec' }),
+              ])
+            ),
+            h(
+              'div',
+              { class: 'span2 ed-row' },
+              checkIn('Each side', st, 'perSide'),
+              h('button', { type: 'button', class: 'ghost', text: 'Up', disabled: i === 0, onclick: () => { list.splice(i - 1, 0, ...list.splice(i, 1)); renderEdit(); } }),
+              h('button', { type: 'button', class: 'ghost danger', text: 'Remove', onclick: () => { list.splice(i, 1); renderEdit(); } })
+            )
+          )
+        )
+      ),
+      h('button', {
+        type: 'button',
+        class: 'ghost wide',
+        text: 'Add a stretch',
+        onclick: () => {
+          list.push({ id: `st-${Date.now().toString(36)}`, name: '', target: 30, unit: 'sec', perSide: true });
+          renderEdit();
+        },
+      })
+    );
+  }
+
   function renderEdit() {
     const plan = state.draft;
+    plan.stretches = plan.stretches || structuredClone(stretchesOf({}));
     const day = findDay(state.dayId);
     const scrollY = window.scrollY;
     plan.warmup = plan.warmup || { name: '', minutes: '' };
@@ -851,7 +998,9 @@ import * as Cloud from './cloud.js';
           { class: 'ed-grid' },
           field('Warm-up (blank hides it)', textIn(plan.warmup, 'name', { placeholder: 'e.g. StairMaster' })),
           field('Warm-up minutes', numIn(plan.warmup, 'minutes')),
-          field('Notes in the menu, one per line', notes, 'span2')
+          field('Notes in the menu, one per line', notes, 'span2'),
+          renderEditStretches(plan, 'pre', 'Stretches before (every day)'),
+          renderEditStretches(plan, 'post', 'Stretches after (every day)')
         ),
         h('label', { class: 'ghost wide file-btn' }, 'Replace the whole plan from a file', fileIn)
       ),
