@@ -246,6 +246,132 @@ import * as Cloud from './cloud.js';
     $('#timer').hidden = true;
   }
 
+  /* ================= hold timer (timed sets and stretches) ================= */
+  // One countdown at a time. Each-side items run side 1, a short switch, then side 2.
+  // The running button is found by data-hold and updated in place, so typing elsewhere isn't disturbed.
+
+  const SWITCH_SECONDS = 5;
+  const CLOCK_SVG =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13.5" r="7.5" fill="none" stroke="currentColor" stroke-width="2.2"/>' +
+    '<path d="M12 9.5v4l2.5 2M10 3h4M18.5 6.5l1.5-1.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+  const hold = { key: null, phases: [], phase: 0, end: 0, started: 0, handle: null, onDone: null, onStop: null, lock: null };
+  let audio = null;
+
+  function beep(count = 1, freq = 880) {
+    try {
+      audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+      if (audio.state === 'suspended') audio.resume();
+      for (let i = 0; i < count; i++) {
+        const t = audio.currentTime + i * 0.22;
+        const osc = audio.createOscillator();
+        const gain = audio.createGain();
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+        osc.connect(gain).connect(audio.destination);
+        osc.start(t);
+        osc.stop(t + 0.18);
+      }
+    } catch {
+      /* no audio available */
+    }
+    if (navigator.vibrate) navigator.vibrate(count > 1 ? [200, 100, 200] : 150);
+  }
+
+  async function keepAwake(on) {
+    try {
+      if (on && 'wakeLock' in navigator) hold.lock = await navigator.wakeLock.request('screen');
+      else if (!on && hold.lock) {
+        const lock = hold.lock;
+        hold.lock = null;
+        await lock.release();
+      }
+    } catch {
+      /* not supported or not allowed; the timer still works */
+    }
+  }
+
+  const holdLeft = () => Math.max(0, Math.ceil((hold.end - Date.now()) / 1000));
+  const isSwitch = () => hold.phases.length > 1 && hold.phase === 1;
+
+  const holdContent = () => [
+    h('span', { class: 'hold-time', text: isSwitch() ? 'Switch' : fmtClock(holdLeft()) }),
+    hold.phases.length > 1 && !isSwitch() ? h('span', { class: 'hold-side', text: hold.phase === 0 ? 'side 1' : 'side 2' }) : null,
+  ];
+
+  function paintHold() {
+    for (const btn of document.querySelectorAll(`[data-hold="${CSS.escape(hold.key)}"]`)) btn.replaceChildren(...holdContent().filter(Boolean));
+  }
+
+  function tickHold() {
+    if (!hold.key) return;
+    if (holdLeft() <= 0) {
+      if (hold.phase < hold.phases.length - 1) {
+        hold.phase++;
+        hold.end = Date.now() + hold.phases[hold.phase] * 1000;
+        beep(isSwitch() ? 1 : 2, isSwitch() ? 660 : 880);
+      } else {
+        const done = hold.onDone;
+        clearHold();
+        beep(3, 988);
+        done();
+        return;
+      }
+    }
+    paintHold();
+    hold.handle = setTimeout(tickHold, 250);
+  }
+
+  function clearHold() {
+    clearTimeout(hold.handle);
+    Object.assign(hold, { key: null, phases: [], phase: 0, onDone: null, onStop: null });
+    keepAwake(false);
+  }
+
+  function startHold(key, seconds, perSide, onDone, onStop) {
+    if (hold.key) clearHold();
+    stopTimer(); // starting the next hold means the rest is over
+    Object.assign(hold, {
+      key,
+      phases: perSide ? [seconds, SWITCH_SECONDS, seconds] : [seconds],
+      phase: 0,
+      started: Date.now(),
+      end: Date.now() + seconds * 1000,
+      onDone,
+      onStop,
+    });
+    beep(1, 660); // also unlocks audio on iPhone, which needs a tap first
+    keepAwake(true);
+    renderTrain();
+    tickHold();
+  }
+
+  function stopHold() {
+    const { onStop, started, phases } = hold;
+    const held = Math.min(Math.round((Date.now() - started) / 1000), phases[0]);
+    clearHold();
+    if (onStop) onStop(held);
+    renderTrain();
+  }
+
+  // Seconds for one side of a timed item, or 0 if it isn't timed.
+  const holdSeconds = (unit, amount) => (unit === 'sec' ? amount : unit === 'min' ? amount * 60 : 0);
+
+  function holdButton(key, seconds, perSide, name, onDone, onStop) {
+    const running = hold.key === key;
+    const btn = h('button', {
+      type: 'button',
+      class: `tick hold${running ? ' running' : ''}`,
+      'data-hold': key,
+      'aria-label': running ? `Stop the timer for ${name}` : `Start a ${fmtClock(seconds)} timer for ${name}${perSide ? ', each side' : ''}`,
+      onclick: () => (hold.key === key ? stopHold() : startHold(key, seconds, perSide, onDone, onStop)),
+    });
+    if (running) append(btn, holdContent());
+    else btn.innerHTML = CLOCK_SVG;
+    return btn;
+  }
+
   /* ================= rendering ================= */
 
   function render() {
@@ -468,6 +594,15 @@ import * as Cloud from './cloud.js';
               { class: 'st-row' },
               formToggle(st.id, st.name, 'span'),
               h('span', { class: 'st-dose', text: doseText(st) }),
+              st.unit === 'sec' && !done
+                ? holdButton(`st:${key}:${st.id}`, Math.round(num(st.target) || 0), st.perSide, st.name, () => {
+                    const s = ensureSession(key);
+                    s.stretched = { ...(s.stretched || {}), [st.id]: true };
+                    s.updated = Date.now();
+                    persist(key);
+                    renderTrain();
+                  })
+                : h('span'),
               h('button', {
                 type: 'button',
                 class: 'tick small',
@@ -580,13 +715,35 @@ import * as Cloud from './cloud.js';
       },
     });
 
+    // Timed sets get a countdown: it logs the set when it finishes, or the time held if stopped early.
+    const amount = num(entry.r) ?? ex.target;
+    const timed = !done && holdSeconds(ex.unit, amount) > 0;
+    const timerBtn = timed
+      ? holdButton(
+          `set:${key}:${ex.id}:${i}`,
+          Math.round(holdSeconds(ex.unit, amount)),
+          ex.perSide,
+          label,
+          () => {
+            const w = wInput ? num(wInput.value) ?? num(wInput.placeholder) : null;
+            setEntry(key, ex.id, i, { w, r: amount, done: true });
+            startTimer(restFor(ex));
+            renderTrain();
+          },
+          (held) => {
+            if (held > 0) setEntry(key, ex.id, i, { r: ex.unit === 'min' ? Math.round((held / 60) * 10) / 10 : held });
+          }
+        )
+      : null;
+
     return h(
       'li',
-      { class: `set${ex.weighted ? '' : ' bw'}${done ? ' done' : ''}` },
+      { class: `set${ex.weighted ? '' : ' bw'}${holdSeconds(ex.unit, 1) ? ' timed' : ''}${done ? ' done' : ''}` },
       h('span', { class: 'n', text: String(i + 1), 'aria-hidden': 'true' }),
       wInput ? h('span', { class: 'inp' }, wInput, h('span', { class: 'suffix', text: 'lb', 'aria-hidden': 'true' })) : null,
       wInput ? h('span', { class: 'x', text: '×', 'aria-hidden': 'true' }) : null,
       h('span', { class: 'inp' }, rInput, h('span', { class: 'suffix', text: UNIT[ex.unit], 'aria-hidden': 'true' })),
+      holdSeconds(ex.unit, 1) ? timerBtn || h('span') : null,
       tick
     );
   }
