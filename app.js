@@ -403,6 +403,35 @@ import * as Cloud from './cloud.js';
     $('#day-strip').hidden = state.view === 'history';
   }
 
+  /* ---------- this week ---------- */
+  // Weeks run Monday to Sunday. A plan day counts as done once any set or stretch is ticked.
+
+  function weekStart() {
+    const d = new Date();
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return localISO(d);
+  }
+  const hasWork = (s) =>
+    Object.values(s.sets || {}).some((arr) => arr.some((x) => x && x.done)) || Object.values(s.stretched || {}).some(Boolean);
+  function doneThisWeek(dayId) {
+    const from = weekStart();
+    return Object.values(state.logs.sessions).filter((s) => s.day === dayId && s.date >= from && hasWork(s));
+  }
+
+  // Opens on today's plan day, unless that workout was already done earlier this week
+  // (you swapped days); then it opens on the earliest regular day not done yet.
+  function pickStartDay(plan) {
+    const todayId = DAY_IDS[new Date().getDay()];
+    if (!plan.days.some((d) => d.id === todayId)) return { id: plan.days[0].id };
+    const done = doneThisWeek(todayId);
+    if (!done.length || done.some((s) => s.date === localISO())) return { id: todayId };
+    const next = plan.days.find((d) => !d.optional && !doneThisWeek(d.id).length);
+    if (!next) return { id: todayId };
+    const when = asDate(done[0].date).toLocaleDateString(undefined, { weekday: 'long' });
+    return { id: next.id, note: `${findDayIn(plan, todayId).name}’s workout was done on ${when}, so today shows ${next.name}.` };
+  }
+  const findDayIn = (plan, id) => plan.days.find((d) => d.id === id);
+
   function renderStrip() {
     const todayId = DAY_IDS[new Date().getDay()];
     const core = h('div', { class: 'side core' });
@@ -412,9 +441,11 @@ import * as Cloud from './cloud.js';
         'button',
         {
           type: 'button',
-          class: 'day',
+          class: `day${state.view !== 'edit' && doneThisWeek(day.id).length ? ' done' : ''}`,
           'aria-pressed': String(day.id === state.dayId),
-          'aria-label': `${day.name}${day.optional ? ', optional' : ''}${day.id === todayId ? ', today' : ''}`,
+          'aria-label': `${day.name}${day.optional ? ', optional' : ''}${day.id === todayId ? ', today' : ''}${
+            state.view !== 'edit' && doneThisWeek(day.id).length ? ', done this week' : ''
+          }`,
           onclick: () => {
             state.dayId = day.id;
             render();
@@ -1277,8 +1308,9 @@ import * as Cloud from './cloud.js';
   function start(plan) {
     state.plan = plan;
     state.view = 'train';
-    const todayId = DAY_IDS[new Date().getDay()];
-    state.dayId = plan.days.some((d) => d.id === todayId) ? todayId : plan.days[0].id;
+    const pick = pickStartDay(plan);
+    state.dayId = pick.id;
+    if (pick.note) setTimeout(() => toast(pick.note), 300);
 
     $('#m-user').textContent = `Signed in as ${state.user.email}`;
     $('#m-notes').replaceChildren(...(plan.notes || []).map((n) => h('p', { text: n })));

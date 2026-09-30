@@ -92,11 +92,13 @@ button { -webkit-tap-highlight-color: transparent; }
 .login h1 { font: 700 52px/0.95 var(--display); margin: 4px 0 10px; letter-spacing: -0.01em; }
 
 /* ---------- header ---------- */
-.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }
-.top-text { min-width: 0; }
-.top h1 { font: 700 clamp(40px, 12vw, 60px)/0.92 var(--display); margin: 0; letter-spacing: -0.01em; }
-.focus { margin: 8px 0 0; color: var(--mist); }
-.top-actions { display: flex; gap: 8px; flex-shrink: 0; padding-top: 6px; }
+/* Title and buttons share the first row; the subtitle spans the full width below. */
+.top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 12px; margin-bottom: 18px; }
+.top-text { display: contents; }
+.top h1 { grid-column: 1; grid-row: 1; min-width: 0; font: 700 clamp(40px, 12vw, 60px)/0.92 var(--display); margin: 0; letter-spacing: -0.01em; }
+.focus { grid-column: 1 / -1; grid-row: 2; margin: 8px 0 0; color: var(--mist); }
+.focus:empty { display: none; }
+.top-actions { grid-column: 2; grid-row: 1; display: flex; gap: 8px; padding-top: 6px; }
 
 /* ---------- day strip: the table seen from above ---------- */
 .table {
@@ -138,6 +140,14 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 .optional .day { color: var(--mist); }
 .day[aria-pressed="true"] { background: var(--line); color: var(--table); }
+.day.done::after { /* a short bar under days finished this week */
+  content: "";
+  position: absolute;
+  left: 50%; bottom: 5px;
+  width: 16px; height: 3px; margin-left: -8px;
+  border-radius: 2px;
+  background: var(--ball);
+}
 .day .ball {
   position: absolute;
   top: 5px; left: 50%;
@@ -434,6 +444,9 @@ dialog h2 { font: 700 32px/1 var(--display); margin: 0 0 16px; }
   .tick { transition: none; }
 }
 @media (max-width: 380px) {
+  .top h1 { font-size: 34px; }
+  .top-actions { gap: 6px; }
+  .top-actions .ghost { padding: 7px 9px; font-size: 15px; }
   .set { grid-template-columns: 18px minmax(0, 1fr) 10px minmax(0, 1fr) 44px; gap: 6px; }
   .tick { width: 44px; height: 44px; }
   .set.timed { grid-template-columns: 18px minmax(0, 1fr) 10px minmax(0, 1fr) 44px 44px; }
